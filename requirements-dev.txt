@@ -2,5 +2,6 @@ covdefaults>=2.2
 coverage
 distlib
 pytest
+pytest-asyncio
 pytest-env
 re-assert
