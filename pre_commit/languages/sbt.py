@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import socket
 from pathlib import Path
 from typing import Sequence
+from typing import TextIO
+from urllib.parse import urlparse
 
 from pre_commit.hook import Hook
 from pre_commit.languages import helpers
@@ -20,8 +24,10 @@ def run_hook(
         color: bool,
 ) -> tuple[int, bytes]:
     if is_server_running(Path('.')):
-        # TODO: Improve impl to connect to run commands via SBT server
-        return run_sbt_hook_via_commandline(hook, file_args, color)
+        with open(port_file_path(Path('.')), encoding='UTF-8') as port_file, \
+                connect_to_sbt_server(connection_details(port_file)) as _:
+            # TODO: Improve impl to connect to run commands via SBT server
+            return run_sbt_hook_via_commandline(hook, file_args, color)
     else:
         return run_sbt_hook_via_commandline(hook, file_args, color)
 
@@ -68,3 +74,25 @@ def port_file_path(root_dir: Path) -> Path:
     :return: The path to the port file
     """
     return root_dir.joinpath(_ACTIVE_JSON_PATH)
+
+
+def connection_details(active_json_io: TextIO) -> Path:
+    """
+    Get the location of the unix socket, from the opened port file
+    :param active_json_io: An opened port file
+    :return: The path to the unix socket
+    """
+    parsed_json: dict[str, str] = json.load(active_json_io)
+    uri = parsed_json['uri']
+    return Path(urlparse(uri).path)
+
+
+def connect_to_sbt_server(socket_file: Path) -> socket.socket:
+    """
+    Create a connection to a unix socket
+    :param socket_file: The path to the socket
+    :return: A socket connection
+    """
+    sbt_connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sbt_connection.connect(str(socket_file))
+    return sbt_connection

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ import pytest_asyncio
 
 from pre_commit.hook import Hook
 from pre_commit.languages import sbt
+from pre_commit.languages.sbt import connect_to_sbt_server
+from pre_commit.languages.sbt import connection_details
 from pre_commit.languages.sbt import is_server_running
 from pre_commit.languages.sbt import port_file_path
 from testing.sbt_test_utils import shutdown_sbt_server
@@ -61,6 +64,37 @@ def test_is_server_running_false(sbt_project_without_server: Path) -> None:
 
 
 @skipif_cant_run_sbt
+def test_connection_details_port_file_is_readable(
+        sbt_project_with_server: Path,
+) -> None:
+    """connection_details can read a running SBT server's port file"""
+
+    # arrange
+    port_file = port_file_path(sbt_project_with_server)
+
+    # act
+    socket_path: Path = connection_details(port_file.open('r'))
+
+    # assert
+    assert socket_path.exists()
+
+
+def test_connect_to_sbt_server(tmp_path: Path) -> None:
+    """connect_to_sbt_server, should connect to an existing socket"""
+    # arrange & act
+    sock_file = tmp_path.joinpath('socket.sock')
+    with _create_listening_socket(sock_file) as sock_listen,\
+            connect_to_sbt_server(sock_file) as sock_under_test:
+        expected = 'sample text'
+        conn, _ = sock_listen.accept()
+        sock_under_test.send(expected.encode('UTF-8'))
+
+        # assert
+        actual = conn.recv(len(expected)).decode('UTF-8')
+        assert actual == expected
+
+
+@skipif_cant_run_sbt
 @pytest.mark.parametrize(
     ['args', 'files'],
     product(
@@ -109,6 +143,13 @@ def _create_hook(**kwargs: Any) -> Hook:
     default_values = {field: None for field in Hook._fields}
     actual_values = {**default_values, **kwargs}
     return Hook(**actual_values)  # type: ignore
+
+
+def _create_listening_socket(path: Path) -> socket.socket:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(str(path))
+    sock.listen()
+    return sock
 
 
 @pytest_asyncio.fixture
