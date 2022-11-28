@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Sequence
 
 from pre_commit.hook import Hook
@@ -10,14 +11,19 @@ install_environment = helpers.no_install
 health_check = helpers.basic_health_check
 get_default_version = helpers.basic_get_default_version
 
+_ACTIVE_JSON_PATH = 'project/target/active.json'
+
 
 def run_hook(
         hook: Hook,
         file_args: Sequence[str],
         color: bool,
 ) -> tuple[int, bytes]:
-    # TODO: Improve impl to connect to run commands via SBT server
-    return run_sbt_hook_via_commandline(hook, file_args, color)
+    if is_server_running(Path('.')):
+        # TODO: Improve impl to connect to run commands via SBT server
+        return run_sbt_hook_via_commandline(hook, file_args, color)
+    else:
+        return run_sbt_hook_via_commandline(hook, file_args, color)
 
 
 def run_sbt_hook_via_commandline(
@@ -42,3 +48,23 @@ def run_sbt_hook_via_commandline(
 
 def _quote(s: str) -> str:
     return f"\"{s}\""
+
+
+def is_server_running(root_dir: Path) -> bool:
+    """
+    Determine whether the server is running, based on the presence or lack
+    there of an SBT port file
+    :param root_dir: The root directory of the project
+    :return: True if SBT server is running in this directory, else False
+    """
+    return port_file_path(root_dir).exists()
+
+
+def port_file_path(root_dir: Path) -> Path:
+    """
+    Get the location of a port file, given the directory an SBT server is
+    running in
+    :param root_dir: The root directory of an SBT server
+    :return: The path to the port file
+    """
+    return root_dir.joinpath(_ACTIVE_JSON_PATH)

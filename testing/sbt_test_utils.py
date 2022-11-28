@@ -5,6 +5,8 @@ import subprocess
 from asyncio.subprocess import Process
 from pathlib import Path
 
+from pre_commit.languages.sbt import is_server_running
+
 _TIMEOUT = 30
 
 
@@ -40,16 +42,5 @@ async def shutdown_sbt_server(
 
 
 async def _wait_until_server_started(root_dir: Path) -> None:
-    while not _is_server_running(root_dir):
+    while not is_server_running(root_dir):
         await asyncio.sleep(1)
-
-
-_ACTIVE_JSON_PATH = 'project/target/active.json'
-
-
-def _port_file_path(root_dir: Path) -> Path:
-    return root_dir.joinpath(_ACTIVE_JSON_PATH)
-
-
-def _is_server_running(root_dir: Path) -> bool:
-    return _port_file_path(root_dir).exists()

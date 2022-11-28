@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import os.path
 import shutil
-from pathlib import Path
 from typing import Any
 from unittest import mock
 
 import cfgv
 import pytest
-import pytest_asyncio
 import re_assert
 
 import pre_commit.constants as C
@@ -32,8 +30,6 @@ from pre_commit.util import cmd_output_b
 from testing.fixtures import make_config_from_repo
 from testing.fixtures import make_repo
 from testing.fixtures import modify_manifest
-from testing.sbt_test_utils import shutdown_sbt_server
-from testing.sbt_test_utils import start_sbt_server
 from testing.util import cwd
 from testing.util import get_resource_path
 from testing.util import skipif_cant_run_coursier
@@ -1155,18 +1151,6 @@ def test_local_lua_additional_dependencies(store):
     ret, out = _hook_run(hook, (), color=False)
     assert b'Luacheck' in out
     assert ret == 0
-
-
-@pytest_asyncio.fixture(params=[False, True])
-async def sbt_project_with_touch_command(tempdir_factory, request):
-    project_repo = make_repo(tempdir_factory, 'sbt_repo_with_touch_command')
-    project_root = Path(project_repo)
-    if request.param:  # start an sbt server
-        server_process = await start_sbt_server(project_root)
-        yield project_root
-        await shutdown_sbt_server(server_process)
-    else:  # don't start an sbt server
-        yield project_root
 
 
 @skipif_cant_run_sbt

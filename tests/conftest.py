@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+import pytest_asyncio
 
 from pre_commit import output
 from pre_commit.envcontext import envcontext
@@ -19,6 +20,8 @@ from testing.fixtures import git_dir
 from testing.fixtures import make_consuming_repo
 from testing.fixtures import make_repo
 from testing.fixtures import write_config
+from testing.sbt_test_utils import shutdown_sbt_server
+from testing.sbt_test_utils import start_sbt_server
 from testing.util import cwd
 from testing.util import git_commit
 
@@ -254,7 +257,13 @@ def set_git_templatedir(tmpdir_factory):
         yield
 
 
-@pytest.fixture
-def sbt_project_with_touch_command(tempdir_factory):
+@pytest_asyncio.fixture(params=[False, True])
+async def sbt_project_with_touch_command(tempdir_factory, request):
     project_repo = make_repo(tempdir_factory, 'sbt_repo_with_touch_command')
-    return Path(project_repo)
+    project_root = Path(project_repo)
+    if request.param:  # start an sbt server
+        server_process = await start_sbt_server(project_root)
+        yield project_root
+        await shutdown_sbt_server(server_process)
+    else:  # don't start an sbt server
+        yield project_root
