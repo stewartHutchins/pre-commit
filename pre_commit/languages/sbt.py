@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 import socket
+from asyncio import StreamReader
 from pathlib import Path
+from typing import AsyncIterable
 from typing import Sequence
 from typing import TextIO
+from typing import TypeAlias
+from typing import Union
 from urllib.parse import urlparse
 
 from pre_commit.hook import Hook
@@ -16,6 +21,9 @@ health_check = helpers.basic_health_check
 get_default_version = helpers.basic_get_default_version
 
 _ACTIVE_JSON_PATH = 'project/target/active.json'
+
+JsonType: TypeAlias = dict[str, Union[str, Union[int, str, dict[str, object]]]]
+_CONTENT_LENGTH = 'Content-Length'
 
 
 def run_hook(
@@ -121,7 +129,7 @@ def create_exec_request(command_id: int, sbt_command: str) -> str:
 
 
 def _header(length: int) -> str:
-    return f"""Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n"""\
+    return f"""Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n""" \
            f"""Content-Length: {length}\r\n"""
 
 
@@ -136,3 +144,95 @@ def _body(command_id: int, sbt_command: str) -> str:
             },
         },
     )
+
+
+async def read_until_complete_message(
+        reader: StreamReader,
+        task_id: int,
+) -> tuple[int, bytes]:
+    """
+    Read from the stream reader until the final message (indicating the
+    command has completed) has been received
+    :param reader: The stream reader, reading from the SBT server
+    :param task_id: The task ID of the SBT command
+    :return: The return code of the command and the read data read from the
+    server
+    """
+    buffer = io.BytesIO()
+    async for message in _message_iterator(reader):
+        buffer.write(json.dumps(message).encode('UTF-8') + b'\n')
+        if is_completion_message(message, task_id):
+            return return_code(message), buffer.getvalue()
+    raise ValueError('Completion message not found')  # probably not reachable
+
+
+async def _message_iterator(reader: StreamReader) -> AsyncIterable[JsonType]:
+    while not reader.at_eof():
+        yield await get_next_message(reader)
+
+
+async def get_next_message(reader: StreamReader) -> JsonType:
+    """
+    Read the next message sent by SBT server
+    :param reader: A stream reader connected to the socket
+    :return: The next message
+    """
+    headers = _parse_headers(await _read_headers(reader))
+    content_length: int = headers[_CONTENT_LENGTH]  # type: ignore
+    body = _parse_body(await _read_body(content_length, reader))
+    return body
+
+
+def _parse_headers(headers: list[str]) -> JsonType:
+    return dict(_parse_header(header) for header in headers)
+
+
+def _parse_header(header: str) -> tuple[str, str | int]:
+    key, value = header.split(':')
+    if key == _CONTENT_LENGTH:
+        return key, int(value.strip())
+    else:
+        return key, value.strip()
+
+
+async def _read_headers(reader: StreamReader) -> list[str]:
+    headers: list[str] = []
+    while True:
+        line = (await reader.readline()).decode('UTF-8')
+        if line == '\r\n':
+            break
+        headers = headers + [line]
+    return headers
+
+
+async def _read_body(content_length: int, reader: StreamReader) -> str:
+    return (await reader.readexactly(content_length)).decode('UTF-8')
+
+
+def _parse_body(content: str) -> JsonType:
+    body: JsonType = json.loads(content)
+    return body
+
+
+def is_completion_message(message: JsonType, task_id: int) -> bool:
+    """
+    Determine whether the message sent indicates whether the SBT command has
+    completed
+    :param message: A message from sbt server
+    :param task_id: The task ID of the message
+    :return: True if the message sent indicates completion of the command,
+    else False
+    """
+    return message.get('id') == task_id
+
+
+def return_code(completion_msg: JsonType) -> int:
+    """
+    Get the return code from the final response message
+    :param completion_msg: The final response
+    :return: The return code
+    """
+    if 'result' in completion_msg:  # pylint: disable=no-else-return
+        return completion_msg['result']['exitCode']  # type: ignore
+    else:
+        return completion_msg['error']['code']  # type: ignore
