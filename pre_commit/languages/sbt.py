@@ -24,10 +24,7 @@ def run_hook(
         color: bool,
 ) -> tuple[int, bytes]:
     if is_server_running(Path('.')):
-        with open(port_file_path(Path('.')), encoding='UTF-8') as port_file, \
-                connect_to_sbt_server(connection_details(port_file)) as _:
-            # TODO: Improve impl to connect to run commands via SBT server
-            return run_sbt_hook_via_commandline(hook, file_args, color)
+        return run_sbt_hook_via_lsp(hook, file_args, color)
     else:
         return run_sbt_hook_via_commandline(hook, file_args, color)
 
@@ -54,6 +51,17 @@ def run_sbt_hook_via_commandline(
 
 def _quote(s: str) -> str:
     return f"\"{s}\""
+
+
+def run_sbt_hook_via_lsp(
+        hook: Hook,
+        file_args: Sequence[str],
+        color: bool,
+) -> tuple[int, bytes]:
+    with open(port_file_path(Path('.')), encoding='UTF-8') as port_file, \
+            connect_to_sbt_server(connection_details(port_file)) as _:
+        # TODO: Improve impl to connect to run commands via SBT server
+        return run_sbt_hook_via_commandline(hook, file_args, color)
 
 
 def is_server_running(root_dir: Path) -> bool:
