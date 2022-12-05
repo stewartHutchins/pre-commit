@@ -257,10 +257,18 @@ def set_git_templatedir(tmpdir_factory):
         yield
 
 
-@pytest_asyncio.fixture(params=[False, True])
-async def sbt_project_with_touch_command(tempdir_factory, request):
+@pytest_asyncio.fixture
+async def sbt_project_with_touch_command_no_server(tempdir_factory):
     project_repo = make_repo(tempdir_factory, 'sbt_repo_with_touch_command')
-    project_root = Path(project_repo)
+    return Path(project_repo)
+
+
+@pytest_asyncio.fixture(params=[False, True])
+async def sbt_project_with_touch_command(
+        sbt_project_with_touch_command_no_server,
+        request,
+):
+    project_root = sbt_project_with_touch_command_no_server
     if request.param:  # start an sbt server
         server_process = await start_sbt_server(project_root)
         yield project_root

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import socket
+from asyncio import open_unix_connection
 from itertools import product
 from pathlib import Path
+from socket import SocketType
 from typing import Any
 from typing import AsyncGenerator
 
@@ -13,8 +15,10 @@ from pre_commit.hook import Hook
 from pre_commit.languages import sbt
 from pre_commit.languages.sbt import connect_to_sbt_server
 from pre_commit.languages.sbt import connection_details
+from pre_commit.languages.sbt import create_exec_request
 from pre_commit.languages.sbt import is_server_running
 from pre_commit.languages.sbt import port_file_path
+from pre_commit.languages.sbt import read_until_complete_message
 from testing.sbt_test_utils import shutdown_sbt_server
 from testing.sbt_test_utils import start_sbt_server
 from testing.util import cwd
@@ -95,6 +99,31 @@ def test_connect_to_sbt_server(tmp_path: Path) -> None:
 
 
 @skipif_cant_run_sbt
+@pytest.mark.asyncio
+async def test_valid_lsp_request(
+        sbt_project_with_touch_command_and_socket: tuple[Path, SocketType],
+) -> None:
+    """A valid request can be sent to SBT server, and we can determine when
+    the SBT command has complete"""
+    # arrange
+    project_path, sbt_conn = sbt_project_with_touch_command_and_socket
+    task_id = 10
+    file_to_create = 'sample_file.txt'
+
+    reader, writer = await open_unix_connection(sock=sbt_conn)
+
+    # act
+    rpc = create_exec_request(task_id, rf"""touch "{file_to_create}" """)
+    writer.write(rpc.encode('UTF-8'))
+    _rc, _ = await read_until_complete_message(reader, task_id)
+
+    # assert
+    expected_file = project_path.joinpath(file_to_create)
+    assert expected_file.exists()
+    assert _rc == 0
+
+
+@skipif_cant_run_sbt
 @pytest.mark.parametrize(
     ['args', 'files'],
     product(
@@ -166,3 +195,15 @@ def sbt_project_without_server(
         tmp_path: Path,
 ) -> Path:
     return tmp_path
+
+
+@pytest_asyncio.fixture
+async def sbt_project_with_touch_command_and_socket(
+        sbt_project_with_touch_command_no_server: Path,
+) -> AsyncGenerator[tuple[Path, SocketType], None]:
+    project_root = sbt_project_with_touch_command_no_server
+    server_process = await start_sbt_server(project_root)
+    with open(port_file_path(project_root), encoding='UTF-8') as port_file,\
+            connect_to_sbt_server(connection_details(port_file)) as conn:
+        yield project_root, conn
+        await shutdown_sbt_server(server_process)
