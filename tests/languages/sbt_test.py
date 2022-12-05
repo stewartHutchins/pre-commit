@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import socket
 from asyncio import open_unix_connection
+from asyncio import StreamReader
 from itertools import product
 from pathlib import Path
 from socket import SocketType
@@ -16,9 +18,12 @@ from pre_commit.languages import sbt
 from pre_commit.languages.sbt import connect_to_sbt_server
 from pre_commit.languages.sbt import connection_details
 from pre_commit.languages.sbt import create_exec_request
+from pre_commit.languages.sbt import get_next_message
 from pre_commit.languages.sbt import is_server_running
+from pre_commit.languages.sbt import JsonType
 from pre_commit.languages.sbt import port_file_path
 from pre_commit.languages.sbt import read_until_complete_message
+from pre_commit.languages.sbt import return_code
 from testing.sbt_test_utils import shutdown_sbt_server
 from testing.sbt_test_utils import start_sbt_server
 from testing.util import cwd
@@ -96,6 +101,87 @@ def test_connect_to_sbt_server(tmp_path: Path) -> None:
         # assert
         actual = conn.recv(len(expected)).decode('UTF-8')
         assert actual == expected
+
+
+@pytest.mark.parametrize(
+    ['body', 'expected'],
+    [
+        [{'result': {'exitCode': 10}}, 10],
+        [{'error': {'code': 11}}, 11],
+    ],
+)
+def test_return_code(body: JsonType, expected: int) -> None:
+    """The return code can be retrieved from a json message"""
+    # act
+    actual = return_code(body)
+
+    # assert
+    assert actual == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ['completion_msg', 'task_id', 'expected_return_code'],
+    [
+        [{'id': 10, 'result': {'exitCode': 10}}, 10, 10],
+        [{'id': 10, 'error': {'code': 11}}, 10, 11],
+    ],
+)
+async def test_read_until_complete_message(
+        completion_msg: JsonType,
+        task_id: int,
+        expected_return_code: int,
+) -> None:
+    """read_until_complete_message should wait for the right task id and get
+    the return code"""
+    # arrange
+    reader = StreamReader()
+    junk_msg: JsonType = {'junk': 'data'}
+
+    intermediate_message = _create_sbt_response(junk_msg)
+    complete_message = _create_sbt_response(completion_msg)
+
+    reader.feed_data(intermediate_message)
+    reader.feed_data(intermediate_message)
+    reader.feed_data(intermediate_message)
+    reader.feed_data(complete_message)
+
+    # act
+    rc, messages = await read_until_complete_message(reader, task_id)
+
+    # assert
+    assert rc == expected_return_code
+    expected_output = json.dumps(junk_msg) + '\n' +\
+        json.dumps(junk_msg) + '\n' +\
+        json.dumps(junk_msg) + '\n' +\
+        json.dumps(completion_msg) + '\n'
+    assert messages.decode('UTF-8') == expected_output
+
+
+@pytest.mark.asyncio
+async def test_get_next_message() -> None:
+    # arrange
+    reader = StreamReader()
+    arbitrary_msg_1: JsonType = {'value': 1}
+    arbitrary_msg_2: JsonType = {'value': 2}
+    arbitrary_msg_3: JsonType = {'value': 3}
+
+    message1 = _create_sbt_response(arbitrary_msg_1)
+    reader.feed_data(message1)
+    message2 = _create_sbt_response(arbitrary_msg_2)
+    reader.feed_data(message2)
+    message3 = _create_sbt_response(arbitrary_msg_3)
+    reader.feed_data(message3)
+
+    # act
+    first = await get_next_message(reader)
+    second = await get_next_message(reader)
+    third = await get_next_message(reader)
+
+    # assert
+    assert first['value'] == 1
+    assert second['value'] == 2
+    assert third['value'] == 3
 
 
 @skipif_cant_run_sbt
@@ -179,6 +265,16 @@ def _create_listening_socket(path: Path) -> socket.socket:
     sock.bind(str(path))
     sock.listen()
     return sock
+
+
+def _create_sbt_response(body: JsonType) -> bytes:
+    msg = json.dumps(body)
+    return f"""\
+Content-Length: {len(msg)}\r\n\
+Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\
+\r\n\
+{msg}\
+""".encode()
 
 
 @pytest_asyncio.fixture
