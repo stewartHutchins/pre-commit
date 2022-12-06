@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
+import random
 import socket
+from asyncio import open_unix_connection
 from asyncio import StreamReader
 from pathlib import Path
+from socket import SocketType
 from typing import AsyncIterable
 from typing import Sequence
 from typing import TextIO
@@ -21,6 +25,10 @@ health_check = helpers.basic_health_check
 get_default_version = helpers.basic_get_default_version
 
 _ACTIVE_JSON_PATH = 'project/target/active.json'
+
+_MIN_ID = 1
+_MAX_ID = 10**6
+_LSP_TIMEOUT = 45
 
 JsonType: TypeAlias = dict[str, Union[str, Union[int, str, dict[str, object]]]]
 _CONTENT_LENGTH = 'Content-Length'
@@ -49,27 +57,55 @@ def run_sbt_hook_via_commandline(
     appropriate by the hook author),however files will be quoted, so any
     filenames with spaces will be interpreted as a single argument by SBT
     """
-    entry_part = hook.entry
-    args_part = ' '.join(hook.args)
-    files_part = ' '.join(_quote(file) for file in file_args)
-    sbt_command = f'{entry_part} {args_part} {files_part}'
+    sbt_command = _sbt_command(hook.entry, hook.args, file_args)
     shell_cmd = ('sbt', sbt_command)
     return helpers.run_xargs(hook, shell_cmd, [], color=color)
+
+
+def run_sbt_hook_via_lsp(
+        hook: Hook,
+        file_args: Sequence[str],
+        _: bool,
+) -> tuple[int, bytes]:
+    with open(port_file_path(Path('.')), encoding='UTF-8') as port_file, \
+            connect_to_sbt_server(connection_details(port_file)) as conn:
+        sbt_command = _sbt_command(hook.entry, hook.args, file_args)
+        return asyncio.run(
+            run_via_lsp(sbt_command, conn),
+        )
+
+
+def _sbt_command(entry: str, args: Sequence[str], files: Sequence[str]) -> str:
+    args_part = ' '.join(args)
+    files_part = ' '.join(_quote(file) for file in files)
+    return f'{entry} {args_part} {files_part}'
 
 
 def _quote(s: str) -> str:
     return f"\"{s}\""
 
 
-def run_sbt_hook_via_lsp(
-        hook: Hook,
-        file_args: Sequence[str],
-        color: bool,
+async def run_via_lsp(
+        sbt_command: str,
+        sock: SocketType,
+        timeout: int = _LSP_TIMEOUT,
 ) -> tuple[int, bytes]:
-    with open(port_file_path(Path('.')), encoding='UTF-8') as port_file, \
-            connect_to_sbt_server(connection_details(port_file)) as _:
-        # TODO: Improve impl to connect to run commands via SBT server
-        return run_sbt_hook_via_commandline(hook, file_args, color)
+    """
+    Run a command via LSP
+    :param sbt_command: The command to run
+    :param sock: A connection to sbt server
+    :param timeout: A timeout for how long we should wait for a command to be
+    completed
+    :return: None
+    """
+    reader, writer = await open_unix_connection(sock=sock)
+    task_id = random.randint(_MIN_ID, _MAX_ID)
+    json_rpc = create_exec_request(task_id, sbt_command)
+    writer.write(json_rpc.encode('UTF-8'))
+    return await asyncio.wait_for(
+        read_until_complete_message(reader, task_id),
+        timeout=timeout,
+    )
 
 
 def is_server_running(root_dir: Path) -> bool:
